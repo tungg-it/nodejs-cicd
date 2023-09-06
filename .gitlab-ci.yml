@@ -1,0 +1,108 @@
+default:
+  tags:
+    - runner
+
+stages:
+    - test
+    - build
+    - deploy
+
+.install-node:
+    before_script:
+        - echo "Install NodeJS ..."
+        - curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash 
+        - export NVM_DIR="$HOME/.nvm"
+        - source "$NVM_DIR/nvm.sh"
+        - nvm install 16.14.0
+        
+        - echo "Install yarn and NestJS ..."
+        - npm i -g npm
+        - npm i -g yarn @nestjs/cli
+    script:
+        - echo "Install Success!"
+    cache:
+        paths:
+            - ~/.nvm/
+
+.install-aws-cli:
+    before_script:
+        - echo "Install aws-cli"
+        - sudo apt-get install -y awscli
+
+        - echo "Configure AWS CLI ..."
+        - aws configure set aws_access_key_id $AWS_ACCESS_KEY_ID
+        - aws configure set aws_secret_access_key $AWS_SECRET_ACCESS_KEY
+        - aws configure set region $AWS_REGION
+        - aws configure set output json
+
+        - echo "Cache AWS CLI configuration ..."
+        - mkdir -p $CI_PROJECT_DIR/.aws
+        - cp -r ~/.aws/credentials $CI_PROJECT_DIR/.aws/credentials
+        - cp -r ~/.aws/config $CI_PROJECT_DIR/.aws/config
+    script:
+        - echo "Success!"
+    cache:
+        paths:
+            - .aws/credentials
+            - .aws/config
+
+.test:
+    stage: test
+    extends: .install-node
+    rules:
+        - if: $CI_COMMIT_REF_NAME == $DEPLOY_BRANCH
+          changes:
+            - "${APP_DIR}/**/*"
+    script:
+        - echo "Test app ..."
+        - npm --version
+
+.build:
+    stage: build
+    extends: .install-aws-cli
+    rules:
+        - if: $CI_COMMIT_REF_NAME == $DEPLOY_BRANCH
+          changes:
+            - "${APP_DIR}/**/*"
+    script:
+        - echo "Build app ..."
+        - echo "Login to Amazon ECR ..."
+        - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+.deploy:
+    stage: deploy
+    extends: .install-aws-cli
+    rules:
+        - if: $CI_COMMIT_REF_NAME == $DEPLOY_BRANCH
+          changes:
+            - "${APP_DIR}/**/*"
+    script:
+        - echo "Deploy app ..."
+        - echo "Login to Amazon ECR ..."
+        - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+        - docker ps -a
+        - echo "Deploy success!"
+
+################################################
+# Deploy api
+################################################
+
+api-test:
+    extends: .test
+    variables:
+        DEPLOY_BRANCH: main
+        APP_DIR: app
+
+api-build:
+    extends: .build
+    needs: ['api-test']
+    variables:
+        DEPLOY_BRANCH: main
+        APP_DIR: app
+
+api-deploy:
+    extends: .deploy
+    needs: ['api-build']
+    variables:
+        DEPLOY_BRANCH: main
+        APP_DIR: app
